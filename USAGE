@@ -1,0 +1,37 @@
+    NAME
+        deployer - Files deployer
+
+    SYNOPSIS
+        perl deployer.pl [file=path ...|file... -path=same_path]
+
+    DESCRIPTION
+        Copy-paste files into the designated paths.
+
+    OPTIONS
+        file=path
+            A pair of a file and its to-be-deployed path.
+            Multiple pairs are delimited by the space character.
+        file... -path=same_path
+            Multiple files to be deployed into the same path.
+            Filenames are delimited by the space character.
+
+    EXAMPLES
+        perl deployer.pl whatnot.pptx=../to_boss
+        perl deployer.pl ./mame/mame_shiba.png=./shibas
+        perl deployer.pl ./mame/mame_shiba.png ./kuro/kuro_shiba.jpg -path=./shibas
+
+    REQUIREMENTS
+        Perl 5
+
+    SEE ALSO
+        perl(1)
+
+    AUTHOR
+        Jaewoong Jang <jang.comsci@gmail.com>
+
+    COPYRIGHT
+        Copyright (c) 2017-2018 Jaewoong Jang
+
+    LICENSE
+        This software is available under the MIT license;
+        the license information is found in 'LICENSE'.
