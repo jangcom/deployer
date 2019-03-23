@@ -1,2 +1,2 @@
 # deployer
-Files deployer
+File deployment assistant
