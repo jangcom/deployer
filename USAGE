@@ -1,37 +1,49 @@
-    NAME
-        deployer - Files deployer
+NAME
+    deployer - File deployment assistant
 
-    SYNOPSIS
-        perl deployer.pl [file=path ...|file... -path=same_path]
+SYNOPSIS
+        perl deployer.pl [-deploy_path=path]
+                         [-all] [old_file=new_file ...]
+                         [-nofm] [-nopause]
 
-    DESCRIPTION
-        Copy-paste files into the designated paths.
+DESCRIPTION
+    Copy-paste files to a designated path.
 
-    OPTIONS
-        file=path
-            A pair of a file and its to-be-deployed path.
-            Multiple pairs are delimited by the space character.
-        file... -path=same_path
-            Multiple files to be deployed into the same path.
-            Filenames are delimited by the space character.
+OPTIONS
+        -deploy_path=path (short from: -path)
+            The path to which designated files will be deployed.
 
-    EXAMPLES
-        perl deployer.pl whatnot.pptx=../to_boss
-        perl deployer.pl ./mame/mame_shiba.png=./shibas
-        perl deployer.pl ./mame/mame_shiba.png ./kuro/kuro_shiba.jpg -path=./shibas
+        -all (short form: -a)
+            All files in the current working directory will be deployed.
 
-    REQUIREMENTS
-        Perl 5
+        old_file=new_file ...
+            A pair of a filename and its to-be-deployed filename.
+            old_file will be used as new_file if new_file is omitted.
+            Multiple pairs should be delimited by the space character.
+            Accordingly, no space characters are allowed around the equals sign (=).
 
-    SEE ALSO
-        perl(1)
+        -nofm
+            The front matter will not be displayed at the beginning of the program.
 
-    AUTHOR
-        Jaewoong Jang <jang.comsci@gmail.com>
+        -nopause
+            The shell will not be paused at the end of the program.
+            Use it for a batch run.
 
-    COPYRIGHT
-        Copyright (c) 2017-2018 Jaewoong Jang
+EXAMPLES
+        perl deployer.pl -path=../to_boss/ whatnot.pptx=report.pptx
+        perl deployer.pl -path=./shibas/ mame_shiba.png
+        perl deployer.pl -path=./inus/ -a
 
-    LICENSE
-        This software is available under the MIT license;
-        the license information is found in 'LICENSE'.
+REQUIREMENTS
+    Perl 5
+
+AUTHOR
+    Jaewoong Jang <jan9@korea.ac.kr>
+
+COPYRIGHT
+    Copyright (c) 2017-2019 Jaewoong Jang
+
+LICENSE
+    This software is available under the MIT license; the license
+    information is found in 'LICENSE'.
+

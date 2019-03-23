@@ -3,437 +3,243 @@ use strict;
 use warnings;
 use utf8;
 use autodie        qw(open close);
+use Cwd            qw(getcwd);
 use feature        qw(say);
 use File::Basename qw(basename);
 use File::Copy     qw(copy);
 use File::Path     qw(make_path);
-use Carp           qw(croak);
-use constant ARRAY => ref [];
-use constant HASH  => ref {};
-
-
-#
-# Outermost lexicals
-#
-my %prog_info = (
-    titl        => basename($0, '.pl'),
-    expl        => 'Files deployer',
-    vers        => 'v1.0.0',
-    date_last   => '2018-09-27',
-    date_first  => '2017-05-15',
-    opts        => { # Command options
-        fname_path_sep => '=',
-        same_path_flag => '-path=',
-    },
-    auth        => {
-        name => 'Jaewoong Jang',
-        posi => 'PhD student',
-        affi => 'University of Tokyo',
-        mail => 'jang.comsci@gmail.com',
-    },
-    usage       => <<'    END_HEREDOC'
-    NAME
-        deployer - File deployer
-
-    SYNOPSIS
-        perl deployer.pl [file=path ...|file... -path=same_path] 
-
-    DESCRIPTION
-        Copy-paste files into the designated paths.
-
-    OPTIONS
-        file=path
-            A pair of a file and its to-be-deployed path.
-            Multiple pairs are delimited by the space character.
-        file... -path=same_path
-            Multiple files to be deployed into the same path.
-            Filenames are delimited by the space character.
-
-    EXAMPLES
-        perl deployer.pl whatnot.pptx=../to_boss
-        perl deployer.pl ./mame/mame_shiba.png=./shibas
-        perl deployer.pl ./mame/mame_shiba.png ./kuro/kuro_shiba.jpg -path=./shibas
-
-    REQUIREMENTS
-        Perl 5
-
-    SEE ALSO
-        perl(1)
-
-    AUTHOR
-        Jaewoong Jang <jang.comsci@gmail.com>
-
-    COPYRIGHT
-        Copyright (c) 2017-2018 Jaewoong Jang
-
-    LICENSE
-        This software is available under the MIT license;
-        the license information is found in 'LICENSE'.
-    END_HEREDOC
-);
-
-
-#
-# Subroutine calls
-#
-if (@ARGV) {
-    show_front_matter(\%prog_info, 'prog', 'auth');
-    validate_argv(\%prog_info, \@ARGV);
-    validate_argv_additional();
-    deployer();
-}
-elsif (not @ARGV) {
-    show_front_matter(\%prog_info, 'usage');
-}
-pause_shell();
-
-
-#
-# Subroutine definitions
-#
-sub validate_argv_additional { # In addition to My::Toolsets::validate_argv()
-    my $argv_stringified;
-    $argv_stringified .= $_ for @ARGV;
-    
-    # Case 1: Filename-path pairs are designated,
-    #         while the option for the same path is turned on.
-    if (
-        $argv_stringified =~ /$prog_info{opts}->{same_path_flag}/i and
-        $argv_stringified =~ /
-            [^$prog_info{opts}->{same_path_flag}]
-            $prog_info{opts}->{fname_path_sep}
-        /ix
-    ) {
-        print $prog_info{usage};
-        printf(
-            "\n".
-            "    | Guess you've turned on the option %s, in which case\n".
-            "    | only filenames separated by %s should be passed.\n".
-            "    | Please refer to the usage shown above.\n",
-            $prog_info{opts}->{same_path_flag},
-            $prog_info{opts}->{fname_path_sep}
+BEGIN { # Runs at compile time
+    chomp(my $onedrive_path = `echo %OneDrive%`);
+    unless (exists $ENV{PERL5LIB} and -e $ENV{PERL5LIB}) {
+        my %lib_paths = (
+            cwd      => ".", # @INC's become dotless since v5.26000
+            onedrive => "$onedrive_path/cs/langs/perl",
         );
-        exit;
+        unshift @INC, "$lib_paths{$_}/lib" for keys %lib_paths;
     }
+}
+use My::Toolset qw(:coding :rm);
+
+
+our $VERSION = '1.01';
+our $LAST    = '2019-03-24';
+our $FIRST   = '2017-05-15';
+
+
+sub parse_argv {
+    # """@ARGV parser"""
     
-    # Case 2: The option for the same path is turned on multiple times.
-    if (
-        $argv_stringified =~ /
-            $prog_info{opts}->{same_path_flag}
-            .*
-            $prog_info{opts}->{same_path_flag}
-        /ix
-    ) {
-        print $prog_info{usage};
-        printf(
-            "\n".
-            "    | Guess you've turned on the option %s multiple times.\n".
-            "    | Please reduce them to one.\n",
-            $prog_info{opts}->{same_path_flag}
-        );
-        exit;
+    my(
+        $argv_aref,
+        $cmd_opts_href,
+        $run_opts_href,
+    ) = @_;
+    my %cmd_opts = %$cmd_opts_href; # For regexes
+    
+    foreach (@$argv_aref) {
+        if (/$cmd_opts{deploy_path}/) {
+            s/$cmd_opts{deploy_path}//i;
+            $run_opts_href->{deploy_path} = $_;
+            next;
+        }
+        
+        # Deploy all files in the CWD.
+        if (/$cmd_opts{deploy_all}/) {
+            push @{$run_opts_href->{deploy_fnames}}, glob '*';
+            next;
+        }
+        
+        # The front matter won't be displayed at the beginning of the program.
+        if (/$cmd_opts{nofm}/) {
+            $run_opts_href->{is_nofm} = 1;
+            next;
+        }
+        
+        # The shell won't be paused at the end of the program.
+        if (/$cmd_opts{nopause}/) {
+            $run_opts_href->{is_nopause} = 1;
+            next;
+        }
+        
+        # Files to be deployed
+        push @{$run_opts_href->{deploy_fnames}}, $_;
     }
+    rm_duplicates($run_opts_href->{deploy_fnames});
+    
+    return;
 }
 
 
 sub deployer {
-    my @_argv = @ARGV;
-    my @fnames;
-    my %fnames_from_to;
-    my $same_path;
-    my $is_same_path = 0;
-    my $lengthiest   = 0; # For constructing a conversion
-    my $path_delim   = $^O =~ /MSWin/i ? '\\' : '/';
+    # """Deploy the designated files."""
     
-    #
-    # Determine which copy-paste method to use; see (i) and (ii) below.
-    #
-    for (@_argv) {
-        if (/$prog_info{opts}->{same_path_flag}/i) {
-            $is_same_path = 1;
-            ($same_path = $_) =~ s/$prog_info{opts}->{same_path_flag}//i;
+    my $run_opts_href = shift;
+    my %fnames_old_new;
+    my $lengthiest = 0; # For constructing a conversion
+    
+    if (not $run_opts_href->{deploy_path}) {
+        say "No path designated for file deployment.";
+        return;
+    }
+    
+    foreach my $pair (@{$run_opts_href->{deploy_fnames}}) {
+        my @splitted = split /=/, $pair;
+        if (not -d $splitted[0] and -e $splitted[0]) {
+            my $old = $splitted[0];
+            my $new = $splitted[1] // $splitted[0];
+            $fnames_old_new{$old} = sprintf(
+                "%s%s",
+                $run_opts_href->{deploy_path} =~ /[\\\/]$/ ? '' : '/',
+                # For a to-be-deployed fname specified with its path;
+                # e.g. ./subdir/some_file.dat
+                $new =~ /[\\\/]/ ? (split /[\\\/]/, $new)[-1] : $new,
+            );
+            $lengthiest = $splitted[0]
+                if length($splitted[0]) > length($lengthiest);
         }
     }
     
-    # (i) Filename-path pairs
-    if ($is_same_path == 0) {
-        @fnames = @_argv;
-        my @_splitted;
-        foreach my $glued (@fnames) {
-            # Split a filename and its path.
-            @_splitted = split $prog_info{opts}->{fname_path_sep}, $glued;
-            if (-e $_splitted[0]) {
-                # fname => copy()
-                $fnames_from_to{$_splitted[0]} = [
-                    # path         => make_path()
-                    $_splitted[1],
-                    # path + fname => copy()
-                    sprintf(
-                        "%s%s%s",
-                        $_splitted[1],
-                        $path_delim,
-                        # For a to-be-deployed fname specified with its path;
-                        # e.g. ./subdir/some_file.dat
-                        $_splitted[0] =~ /\\|\// ?
-                            (split /\\|\//, $_splitted[0])[-1] :
-                            $_splitted[0]
-                    )
-                ];
-                $lengthiest = $_splitted[0]
-                    if length($_splitted[0]) > length($lengthiest);
+    # Deploy the designated files.
+    if (%fnames_old_new) {
+        # Ask whether to make_path().
+        if (not -d $run_opts_href->{deploy_path}) {
+            printf(
+                "Directory [%s] does not exist. Create? (y/n)>",
+                $run_opts_href->{deploy_path},
+            );
+            while (chomp(my $yn = <STDIN>)) {
+                last   if $yn =~ /\by\b/i;
+                return if $yn =~ /\bn\b/i;
             }
+            make_path($run_opts_href->{deploy_path});
         }
-    }
-    
-    # (ii) Filenames with the same path
-    elsif ($is_same_path == 1) {
-        # Make the argument array contain filenames only.
-        @fnames = grep !/$prog_info{opts}->{same_path_flag}/i, @_argv;
-        foreach my $fname (@fnames) {
-            if (-e $fname) {
-                # fname => copy()
-                $fnames_from_to{$fname} = [
-                    # path  => make_path()
-                    $same_path,
-                    # path + fname => copy()
-                    sprintf(
-                        "%s%s%s",
-                        $same_path,
-                        $path_delim,
-                        # For a filename specified with its path;
-                        # e.g. ./subdir/some_file.dat
-                        $fname =~ /\\|\// ?
-                            (split /\\|\//, $fname)[-1] :
-                            $fname
-                    )
-                ];
-                $lengthiest = $fname if length($fname) > length($lengthiest);
-            }
-        }
-    }
-    
-    #
-    # Deploy the designated files following displaying.
-    #
-    if (%fnames_from_to) {
+        
+        # Perform file deployment.
         say '-' x 70;
-        my $_conv = '%-'.length($lengthiest).'s';
-        while (my($k, $v) = each %fnames_from_to) {
-            printf("$_conv => %s\n", $k, $v->[1]);
-            
-            # Ask whether to make_path().
-            if (not -d $v->[0]) {
-                print "\n[$v->[0]] does not exist.\n".
-                      "Run File::Path::make_path()? (y/n)>";
-                while (chomp(my $yn = <STDIN>)) {
-                    last   if $yn =~ /\by\b/i;
-                    return if $yn =~ /\bn\b/i;
-                }
-                make_path($v->[0]);
-            }
-            
-            copy($k, $v->[1]);
+        my $conv = '%-'.length($lengthiest).'s';
+        while (my($k, $v) = each %fnames_old_new) {
+            printf("$conv => %s\n", $k, $run_opts_href->{deploy_path}.$v);
+            copy($k, $run_opts_href->{deploy_path}.$v);
         }
         say '-' x 70;
     }
-    print %fnames_from_to ?
+    print %fnames_old_new ?
         "Deployment completed. " :
         "None of the designated files found in the current working dir.\n";
+    
+    return;
 }
 
 
-#
-# Subroutines from My::Toolset
-#
-sub show_front_matter {
-    my $hash_ref = shift; # Arg 1: To be %_prog_info
-    
-    #
-    # Data type validation and deref: Arg 1
-    #
-    my $_sub_name = join('::', (caller(0))[0, 3]);
-    croak "The 1st arg to [$_sub_name] must be a hash ref!"
-        unless ref $hash_ref eq HASH;
-    my %_prog_info = %$hash_ref;
-    
-    # Subroutine optional arguments
-    my(
-        $is_prog,
-        $is_auth,
-        $is_usage,
-        $is_timestamp,
-        $is_no_trailing_blkline,
-        $is_no_newline,
-        $is_copy,
-    );
-    my $lead_symb    = '';
-    foreach (@_) {
-        $is_prog                = 1  if /prog/i;
-        $is_auth                = 1  if /auth/i;
-        $is_usage               = 1  if /usage/i;
-        $is_timestamp           = 1  if /timestamp/i;
-        $is_no_trailing_blkline = 1  if /no_trailing_blkline/i;
-        $is_no_newline          = 1  if /no_newline/i;
-        $is_copy                = 1  if /copy/i;
-        # A single non-alphanumeric character
-        $lead_symb              = $_ if /^[^a-zA-Z0-9]$/;
-    }
-    my $newline = $is_no_newline ? "" : "\n";
-    
-    #
-    # Fill in the front matter array.
-    #
-    my @_fm;
-    my $k = 0;
-    my $border_len = $lead_symb ? 69 : 70;
-    my %borders = (
-        '+' => $lead_symb.('+' x $border_len).$newline,
-        '*' => $lead_symb.('*' x $border_len).$newline,
-    );
-    
-    # Top rule
-    if ($is_prog or $is_auth) {
-        $_fm[$k++] = $borders{'+'};
-    }
-    
-    # Program info, except the usage
-    if ($is_prog) {
-        $_fm[$k++] = sprintf(
-            "%s%s %s: %s%s",
-            ($lead_symb ? $lead_symb.' ' : $lead_symb),
-            $_prog_info{titl},
-            $_prog_info{vers},
-            $_prog_info{expl},
-            $newline
+sub outer_deployer {
+    if (@ARGV) {
+        my %prog_info = (
+            titl       => basename($0, '.pl'),
+            expl       => 'File deployment assistant',
+            vers       => $VERSION,
+            date_last  => $LAST,
+            date_first => $FIRST,
+            auth       => {
+                name => 'Jaewoong Jang',
+                posi => 'PhD student',
+                affi => 'University of Tokyo',
+                mail => 'jan9@korea.ac.kr',
+            },
         );
-        $_fm[$k++] = sprintf(
-            "%s%s%s%s",
-            ($lead_symb ? $lead_symb.' ' : $lead_symb),
-            'Last update:'.($is_timestamp ? '  ': ' '),
-            $_prog_info{date_last},
-            $newline
+        my %cmd_opts = ( # Command-line opts
+            deploy_path => qr/-?-(?:deploy_)?path=/i,
+            deploy_all  => qr/-?-a(ll)?/i,
+            nofm        => qr/-?-nofm/i,
+            nopause     => qr/-?-nopause/i,
         );
-    }
-    
-    # Timestamp
-    if ($is_timestamp) {
-        my %_datetimes = construct_timestamps('-');
-        $_fm[$k++] = sprintf(
-            "%sCurrent time: %s%s",
-            ($lead_symb ? $lead_symb.' ' : $lead_symb),
-            $_datetimes{ymdhms},
-            $newline
+        my %run_opts = ( # Program run opts
+            deploy_path   => '',
+            deploy_fnames => [],
+            is_nofm       => 0,
+            is_nopause    => 0,
         );
+        
+        # ARGV validation and parsing
+        validate_argv(\@ARGV, \%cmd_opts);
+        parse_argv(\@ARGV, \%cmd_opts, \%run_opts);
+        
+        # Notification - beginning
+        show_front_matter(\%prog_info, 'prog', 'auth', 'no_trailing_blkline')
+            unless $run_opts{is_nofm};
+        
+        # Main
+        deployer(\%run_opts);
+        
+        # Notification - end
+        pause_shell() unless $run_opts{is_nopause};
     }
     
-    # Author info
-    if ($is_auth) {
-        $_fm[$k++] = $lead_symb.$newline if $is_prog;
-        $_fm[$k++] = sprintf(
-            "%s%s%s",
-            ($lead_symb ? $lead_symb.' ' : $lead_symb),
-            $_prog_info{auth}{$_},
-            $newline
-        ) for qw(name posi affi mail);
-    }
+    system("perldoc \"$0\"") if not @ARGV;
     
-    # Bottom rule
-    if ($is_prog or $is_auth) {
-        $_fm[$k++] = $borders{'+'};
-    }
-    
-    # Program usage: Leading symbols are not used.
-    if ($is_usage) {
-        $_fm[$k++] = $newline if $is_prog or $is_auth;
-        $_fm[$k++] = $_prog_info{usage};
-    }
-    
-    # Feed a blank line at the end of the front matter.
-    if (not $is_no_trailing_blkline) {
-        $_fm[$k++] = $newline;
-    }
-    
-    #
-    # Print the front matter.
-    #
-    if ($is_copy) {
-        return @_fm;
-    }
-    elsif (not $is_copy) {
-        print for @_fm;
-    }
+    return;
 }
 
 
-sub validate_argv {
-    my $hash_ref  = shift; # Arg 1: To be %_prog_info
-    my $array_ref = shift; # Arg 2: To be @_argv
-    my $num_of_req_argv;   # Arg 3: (Optional) Number of required args
-    $num_of_req_argv = shift if defined $_[0];
-    
-    #
-    # Data type validation and deref: Arg 1
-    #
-    my $_sub_name = join('::', (caller(0))[0, 3]);
-    croak "The 1st arg to [$_sub_name] must be a hash ref!"
-        unless ref $hash_ref eq HASH;
-    my %_prog_info = %$hash_ref;
-    
-    #
-    # Data type validation and deref: Arg 2
-    #
-    croak "The 2nd arg to [$_sub_name] must be an array ref!"
-        unless ref $array_ref eq ARRAY;
-    my @_argv = @$array_ref;
-    
-    #
-    # Terminate the program if the number of required arguments passed
-    # is not sufficient.
-    # (performed only when the 3rd optional argument is given)
-    #
-    if ($num_of_req_argv) {
-        my $num_of_req_argv_passed = grep $_ !~ /-/, @_argv;
-        if ($num_of_req_argv_passed < $num_of_req_argv) {
-            say $_prog_info{usage};
-            say "    | You have input $num_of_req_argv_passed required args,".
-                " but we need $num_of_req_argv.";
-            say "    | Please refer to the usage above.";
-            exit;
-        }
-    }
-    
-    #
-    # Count the number of correctly passed options.
-    #
-    
-    # Non-fnames
-    my $num_of_corr_opts = 0;
-    foreach my $arg (@_argv) {
-        foreach my $v (values %{$_prog_info{opts}}) {
-            if ($arg =~ /$v/i) {
-                $num_of_corr_opts++;
-                next;
-            }
-        }
-    }
-    
-    # Fname-likes
-    my $num_of_fnames = 0;
-    $num_of_fnames = grep $_ !~ /^-/, @_argv;
-    $num_of_corr_opts += $num_of_fnames;
-    
-    # Warn if "no" correct options have been passed.
-    if ($num_of_corr_opts == 0) {
-        say $_prog_info{usage};
-        say "    | None of the command-line options was correct.";
-        say "    | Please refer to the usage above.";
-        exit;
-    }
-}
+outer_deployer();
+__END__
 
 
-sub pause_shell {
-    print "Press enter to exit...";
-    while (<STDIN>) { last; }
-}
-#eof
+=head1 NAME
+
+deployer - File deployment assistant
+
+=head1 SYNOPSIS
+
+    perl deployer.pl [-deploy_path=path]
+                     [-all] [old_file=new_file ...]
+                     [-nofm] [-nopause]
+
+=head1 DESCRIPTION
+
+Copy-paste files to a designated path.
+
+=head1 OPTIONS
+
+    -deploy_path=path (short from: -path)
+        The path to which designated files will be deployed.
+
+    -all (short form: -a)
+        All files in the current working directory will be deployed.
+
+    old_file=new_file ...
+        A pair of a filename and its to-be-deployed filename.
+        old_file will be used as new_file if new_file is omitted.
+        Multiple pairs should be delimited by the space character.
+        Accordingly, no space characters are allowed around the equals sign (=).
+
+    -nofm
+        The front matter will not be displayed at the beginning of the program.
+
+    -nopause
+        The shell will not be paused at the end of the program.
+        Use it for a batch run.
+
+=head1 EXAMPLES
+
+    perl deployer.pl -path=../to_boss/ whatnot.pptx=report.pptx
+    perl deployer.pl -path=./shibas/ mame_shiba.png
+    perl deployer.pl -path=./inus/ -a
+
+=head1 REQUIREMENTS
+
+Perl 5
+
+=head1 AUTHOR
+
+Jaewoong Jang <jan9@korea.ac.kr>
+
+=head1 COPYRIGHT
+
+Copyright (c) 2017-2019 Jaewoong Jang
+
+=head1 LICENSE
+
+This software is available under the MIT license;
+the license information is found in 'LICENSE'.
+
+=cut
