@@ -1,0 +1,7 @@
+v1.02
+- 2nd release
+- Module routines have been embedded in the source code;
+  the source code is now standalone.
+
+v1.01
+- 1st release
