@@ -8,22 +8,237 @@ use feature        qw(say);
 use File::Basename qw(basename);
 use File::Copy     qw(copy);
 use File::Path     qw(make_path);
-BEGIN { # Runs at compile time
-    chomp(my $onedrive_path = `echo %OneDrive%`);
-    unless (exists $ENV{PERL5LIB} and -e $ENV{PERL5LIB}) {
-        my %lib_paths = (
-            cwd      => ".", # @INC's become dotless since v5.26000
-            onedrive => "$onedrive_path/cs/langs/perl",
+use Carp           qw(croak);
+use constant ARRAY  => ref [];
+use constant HASH   => ref {};
+
+
+our $VERSION = '1.02';
+our $LAST    = '2019-03-26';
+our $FIRST   = '2017-05-15';
+
+
+#----------------------------------My::Toolset----------------------------------
+sub show_front_matter {
+    # """Display the front matter."""
+    my $sub_name = join('::', (caller(0))[0, 3]);
+    
+    my $prog_info_href = shift;
+    croak "The 1st arg of [$sub_name] must be a hash ref!"
+        unless ref $prog_info_href eq HASH;
+    
+    # Subroutine optional arguments
+    my(
+        $is_prog,
+        $is_auth,
+        $is_usage,
+        $is_timestamp,
+        $is_no_trailing_blkline,
+        $is_no_newline,
+        $is_copy,
+    );
+    my $lead_symb    = '';
+    foreach (@_) {
+        $is_prog                = 1  if /prog/i;
+        $is_auth                = 1  if /auth/i;
+        $is_usage               = 1  if /usage/i;
+        $is_timestamp           = 1  if /timestamp/i;
+        $is_no_trailing_blkline = 1  if /no_trailing_blkline/i;
+        $is_no_newline          = 1  if /no_newline/i;
+        $is_copy                = 1  if /copy/i;
+        # A single non-alphanumeric character
+        $lead_symb              = $_ if /^[^a-zA-Z0-9]$/;
+    }
+    my $newline = $is_no_newline ? "" : "\n";
+    
+    #
+    # Fill in the front matter array.
+    #
+    my @fm;
+    my $k = 0;
+    my $border_len = $lead_symb ? 69 : 70;
+    my %borders = (
+        '+' => $lead_symb.('+' x $border_len).$newline,
+        '*' => $lead_symb.('*' x $border_len).$newline,
+    );
+    
+    # Top rule
+    if ($is_prog or $is_auth) {
+        $fm[$k++] = $borders{'+'};
+    }
+    
+    # Program info, except the usage
+    if ($is_prog) {
+        $fm[$k++] = sprintf(
+            "%s%s - %s%s",
+            ($lead_symb ? $lead_symb.' ' : $lead_symb),
+            $prog_info_href->{titl},
+            $prog_info_href->{expl},
+            $newline,
         );
-        unshift @INC, "$lib_paths{$_}/lib" for keys %lib_paths;
+        $fm[$k++] = sprintf(
+            "%sVersion %s (%s)%s",
+            ($lead_symb ? $lead_symb.' ' : $lead_symb),
+            $prog_info_href->{vers},
+            $prog_info_href->{date_last},
+            $newline,
+        );
+    }
+    
+    # Timestamp
+    if ($is_timestamp) {
+        my %datetimes = construct_timestamps('-');
+        $fm[$k++] = sprintf(
+            "%sCurrent time: %s%s",
+            ($lead_symb ? $lead_symb.' ' : $lead_symb),
+            $datetimes{ymdhms},
+            $newline
+        );
+    }
+    
+    # Author info
+    if ($is_auth) {
+        $fm[$k++] = $lead_symb.$newline if $is_prog;
+        $fm[$k++] = sprintf(
+            "%s%s%s",
+            ($lead_symb ? $lead_symb.' ' : $lead_symb),
+            $prog_info_href->{auth}{$_},
+            $newline
+        ) for qw(name posi affi mail);
+    }
+    
+    # Bottom rule
+    if ($is_prog or $is_auth) {
+        $fm[$k++] = $borders{'+'};
+    }
+    
+    # Program usage: Leading symbols are not used.
+    if ($is_usage) {
+        $fm[$k++] = $newline if $is_prog or $is_auth;
+        $fm[$k++] = $prog_info_href->{usage};
+    }
+    
+    # Feed a blank line at the end of the front matter.
+    if (not $is_no_trailing_blkline) {
+        $fm[$k++] = $newline;
+    }
+    
+    #
+    # Print the front matter.
+    #
+    if ($is_copy) {
+        return @fm;
+    }
+    else {
+        print for @fm;
+        return;
     }
 }
-use My::Toolset qw(:coding :rm);
 
 
-our $VERSION = '1.01';
-our $LAST    = '2019-03-24';
-our $FIRST   = '2017-05-15';
+sub validate_argv {
+    # """Validate @ARGV against %cmd_opts."""
+    my $sub_name = join('::', (caller(0))[0, 3]);
+    
+    my $argv_aref     = shift;
+    my $cmd_opts_href = shift;
+    
+    croak "The 1st arg of [$sub_name] must be an array ref!"
+        unless ref $argv_aref eq ARRAY;
+    croak "The 2nd arg of [$sub_name] must be a hash ref!"
+        unless ref $cmd_opts_href eq HASH;
+    
+    # For yn prompts
+    my $the_prog = (caller(0))[1];
+    my $yn;
+    my $yn_msg = "    | Want to see the usage of $the_prog? [y/n]> ";
+    
+    #
+    # Terminate the program if the number of required arguments passed
+    # is not sufficient.
+    #
+    my $argv_req_num = shift; # (OPTIONAL) Number of required args
+    if (defined $argv_req_num) {
+        my $argv_req_num_passed = grep $_ !~ /-/, @$argv_aref;
+        if ($argv_req_num_passed < $argv_req_num) {
+            printf(
+                "\n    | You have input %s nondash args,".
+                " but we need %s nondash args.\n",
+                $argv_req_num_passed,
+                $argv_req_num,
+            );
+            print $yn_msg;
+            while ($yn = <STDIN>) {
+                system "perldoc $the_prog" if $yn =~ /\by\b/i;
+                exit if $yn =~ /\b[yn]\b/i;
+                print $yn_msg;
+            }
+        }
+    }
+    
+    #
+    # Count the number of correctly passed command-line options.
+    #
+    
+    # Non-fnames
+    my $num_corr_cmd_opts = 0;
+    foreach my $arg (@$argv_aref) {
+        foreach my $v (values %$cmd_opts_href) {
+            if ($arg =~ /$v/i) {
+                $num_corr_cmd_opts++;
+                next;
+            }
+        }
+    }
+    
+    # Fname-likes
+    my $num_corr_fnames = 0;
+    $num_corr_fnames = grep $_ !~ /^-/, @$argv_aref;
+    $num_corr_cmd_opts += $num_corr_fnames;
+    
+    # Warn if "no" correct command-line options have been passed.
+    if (not $num_corr_cmd_opts) {
+        print "\n    | None of the command-line options was correct.\n";
+        print $yn_msg;
+        while ($yn = <STDIN>) {
+            system "perldoc $the_prog" if $yn =~ /\by\b/i;
+            exit if $yn =~ /\b[yn]\b/i;
+            print $yn_msg;
+        }
+    }
+    
+    return;
+}
+
+
+sub pause_shell {
+    # """Pause the shell."""
+    
+    my $notif = $_[0] ? $_[0] : "Press enter to exit...";
+    
+    print $notif;
+    while (<STDIN>) { last; }
+    
+    return;
+}
+
+
+sub rm_duplicates {
+    # """Remove duplicate items from an array."""
+    my $sub_name = join('::', (caller(0))[0, 3]);
+    
+    my $aref = shift;
+    
+    croak "The 1st arg of [$sub_name] must be an array ref!"
+        unless ref $aref eq ARRAY;
+    
+    my(%seen, @uniqued);
+    @uniqued = grep !$seen{$_}++, @$aref;
+    @$aref = @uniqued;
+    
+    return;
+}
+#-------------------------------------------------------------------------------
 
 
 sub parse_argv {
