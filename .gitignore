@@ -1,0 +1,16 @@
+# github archive
+github/
+
+# deployer records
+bak_deployer.pl/
+deployer_baker.bat
+updates.txt
+
+# MSWin link files
+*.lnk
+
+# POD-related
+deployer_usage.bat
+deployer.html
+pod2htmd.tmp
+deployer_pod2html.bat

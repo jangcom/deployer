@@ -37,8 +37,11 @@ EXAMPLES
 REQUIREMENTS
     Perl 5
 
+SEE ALSO
+    deployer on GitHub <https://github.com/jangcom/deployer>
+
 AUTHOR
-    Jaewoong Jang <jan9@korea.ac.kr>
+    Jaewoong Jang <jangj@korea.ac.kr>
 
 COPYRIGHT
     Copyright (c) 2017-2019 Jaewoong Jang

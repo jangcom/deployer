@@ -1,3 +1,7 @@
+v1.03
+- (2019-05-21) The deploy_all regex has been corrected
+  (\b added to the end) not to match a filename containing -a.
+
 v1.02
 - 2nd release
 - Module routines have been embedded in the source code;
